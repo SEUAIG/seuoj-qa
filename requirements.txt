@@ -1,0 +1,18 @@
+# Auto-generated minimal requirements
+aiohttp
+camel-ai
+dataclasses
+fastapi
+jieba
+langchain-core
+loguru
+numpy
+pandas
+pydantic
+requests
+faiss-cpu
+rank-bm25
+uvicorn
+uvloop
+httptools
+python-pptx

@@ -1,0 +1,37 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Node / Frontend build artifacts
+app/front_end/node_modules/
+app/front_end/dist/
+app/front_end/.dockerignore
+
+# Existing deploy configs (Docker uses docker/ directory instead)
+app/front_end/deploy/
+
+# IDE
+.vscode/
+.idea/
+
+# Tests
+test/
+
+# Output / temporary
+output/
+logs/
+tmp/
+*.log
+nano.save
+
+# Docker compose/env files (not needed inside image)
+docker/.env
+docker/.env.example
+docker/docker-compose.yml
