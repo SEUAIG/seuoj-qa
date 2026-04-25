@@ -27,6 +27,9 @@ cp config/example.yaml config/base.yaml
 uvicorn src.api_server:app --host 0.0.0.0 --port 8002
 ```
 
+聊天 SQLite 默认路径为 `/app/data/chat.db`（目录和文件会自动创建）。
+如需自定义路径，可设置环境变量 `CHAT_DB_PATH`。
+
 > 在 Docker 部署中，通过 Nginx `/agent/*` 路由代理访问。
 
 ## 配置

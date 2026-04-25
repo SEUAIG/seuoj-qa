@@ -14,13 +14,25 @@
 import sqlite3
 import uuid
 import threading
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from typing import Optional, List
+from typing import Optional, List, Union
 
-# 默认数据库路径
-DB_PATH = Path(__file__).parent / "data" / "chat.db"
+# 默认数据库路径（可通过环境变量覆盖）
+DEFAULT_DB_PATH = Path("/app/data/chat.db")
+DB_PATH_ENV_VAR = "CHAT_DB_PATH"
+
+
+def resolve_db_path(db_path: Union[str, Path, None] = None) -> Path:
+    """解析数据库路径，优先级：参数 > 环境变量 > 默认值。"""
+    if db_path is not None:
+        raw_path = db_path
+    else:
+        env_path = os.getenv(DB_PATH_ENV_VAR, "").strip()
+        raw_path = env_path or DEFAULT_DB_PATH
+    return Path(raw_path).expanduser().resolve()
 
 
 def generate_id() -> str:
@@ -35,9 +47,11 @@ def generate_id() -> str:
 _local = threading.local()
 
 
-def get_connection(db_path: Path = None) -> sqlite3.Connection:
+def get_connection(db_path: Union[str, Path, None] = None) -> sqlite3.Connection:
     """获取当前线程的数据库连接（复用）"""
-    path = str(db_path or DB_PATH)
+    resolved_path = resolve_db_path(db_path)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    path = str(resolved_path)
     if not hasattr(_local, "connections"):
         _local.connections = {}
     if path not in _local.connections:
@@ -50,7 +64,7 @@ def get_connection(db_path: Path = None) -> sqlite3.Connection:
 
 
 @contextmanager
-def get_db(db_path: Path = None):
+def get_db(db_path: Union[str, Path, None] = None):
     """上下文管理器，自动 commit/rollback"""
     conn = get_connection(db_path)
     try:
@@ -114,10 +128,9 @@ CREATE INDEX IF NOT EXISTS idx_mc_message_id ON message_citation(message_id);
 """
 
 
-def init_db(db_path: Path = None):
+def init_db(db_path: Union[str, Path, None] = None):
     """初始化数据库（建表）"""
-    path = db_path or DB_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = resolve_db_path(db_path)
     conn = get_connection(path)
     conn.executescript(SCHEMA_SQL)
     conn.commit()

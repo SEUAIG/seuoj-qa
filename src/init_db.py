@@ -17,17 +17,20 @@ from pathlib import Path
 # 确保可以导入 database 模块
 sys.path.insert(0, str(Path(__file__).parent))
 
-from database import init_db, get_connection, DB_PATH
+from database import init_db, get_connection, resolve_db_path, DB_PATH_ENV_VAR
 
 
 def main():
+    db_path = resolve_db_path()
+
     print("=" * 50)
     print("  AIgorithm_Agent 数据库初始化 (SQLite)")
     print("=" * 50)
     print()
 
     # 1. 初始化（建表）
-    print(f"[1/2] 初始化数据库: {DB_PATH}")
+    print(f"[1/2] 初始化数据库: {db_path}")
+    print(f"      路径来源: 环境变量 {DB_PATH_ENV_VAR} 或默认路径")
     init_db()
     print("      完成!")
     print()
@@ -52,7 +55,7 @@ def main():
 
     print()
     print("=" * 50)
-    print(f"  初始化完成! 数据库文件: {DB_PATH}")
+    print(f"  初始化完成! 数据库文件: {db_path}")
     print("=" * 50)
 
 
