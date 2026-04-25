@@ -150,7 +150,7 @@ def log_agent(agent_name: str, message: str, data: Any = None):
 # Core Agent Functions
 # ================================
 
-def agent_framework_stream(user_query: str):
+def agent_framework_stream(user_query: str, history_context: str = ""):
     """
     流式版本：先完整生成答案，再逐chunk流式输出，最后发 citations。
     每个 chunk 格式为 SSE: "data: {...}\n\n"
@@ -196,9 +196,13 @@ def agent_framework_stream(user_query: str):
     observations_text = "\n\n".join(formatted_observations)
 
     # 流式调用 LLM（纯文本输出，不含 JSON）
+    if history_context:
+        user_content = f"对话历史：\n{history_context}\n\n请基于以下证据回答问题：\n{observations_text}"
+    else:
+        user_content = f"Observations：\n{observations_text}"
     messages = [
         {"role": "system", "content": EXECUTOR_SYNTHESIZE_PROMPT_STREAM},
-        {"role": "user", "content": f"Observations：\n{observations_text}"}
+        {"role": "user", "content": user_content}
     ]
 
     log_agent("EXECUTOR", "Streaming answer")
@@ -237,7 +241,7 @@ def agent_framework_stream(user_query: str):
     yield f"data: {json.dumps({'type': 'done', 'citations': citations_display}, ensure_ascii=False)}\n\n"
     log_agent("CONTROLLER", "Stream finished")
 
-def agent_framework(user_query: str) -> Dict[str, Any]:
+def agent_framework(user_query: str, history_context: str = "") -> Dict[str, Any]:
     """
     Main controller — 直接执行，跳过 PLANNER 和 VERIFIER 以节省时间。
     faiss_search 和 bm25_search 并行执行以节省检索时间。
@@ -287,9 +291,13 @@ def agent_framework(user_query: str) -> Dict[str, Any]:
 
     # Synthesize
     log_agent("EXECUTOR", "Synthesizing answer")
+    if history_context:
+        user_content = f"对话历史：\n{history_context}\n\n请基于以下证据回答问题：\n{observations_text}"
+    else:
+        user_content = f"Observations：\n{observations_text}"
     messages = [
         {"role": "system", "content": EXECUTOR_SYNTHESIZE_PROMPT},
-        {"role": "user", "content": f"Observations：\n{observations_text}"}
+        {"role": "user", "content": user_content}
     ]
     resp = LLM_CLIENT.chat.completions.create(
         model=LLM_PROVIDER["model"],

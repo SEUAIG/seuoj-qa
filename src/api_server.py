@@ -88,6 +88,27 @@ class Query(BaseModel):
     user_id: Optional[str] = "default"
 
 
+# ---------- 辅助函数 ----------
+def build_history_context(session_id: str, max_messages: int = 10, max_chars: int = 2000) -> str:
+    """从数据库拉取历史消息，拼成上下文字符串，支持截断"""
+    messages = get_messages(session_id)
+    if not messages:
+        return ""
+
+    # 取最近 N 条消息
+    recent = messages[-max_messages:]
+    lines = []
+    total_chars = 0
+    for msg in recent:
+        role = "用户" if msg["role"] == "USER" else "助手"
+        line = f"{role}：{msg['content']}"
+        if total_chars + len(line) > max_chars:
+            break
+        lines.append(line)
+        total_chars += len(line)
+
+    return "\n".join(lines)
+
 # ---------- Root ----------
 @agent_router.get("/")
 def root():
@@ -111,17 +132,27 @@ def api_rag(req: Query):
     if req.session_id:
         session = get_session(req.session_id)
         if not session:
-            session = create_session(req.user_id, req.query[:50])
+            # 前端传的 session_id 不存在，用它创建新 session
+            from src.database import get_db, _now
+            now = _now()
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO chat_session (session_id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)",
+                    (req.session_id, req.user_id, req.query[:50], now, now)
+                )
+        session_id = req.session_id
     else:
         session = create_session(req.user_id, req.query[:50])
-
-    session_id = session["session_id"]
+        session_id = session["session_id"]
 
     # 保存用户消息
     create_message(session_id, "USER", req.query)
 
+    # 构建历史上下文
+    history_context = build_history_context(session_id)
+
     # 调用 RAG
-    response = agent_framework(req.query)
+    response = agent_framework(req.query, history_context)
     answer, citations = format_response(response)
 
     # 保存 AI 回复（含引用）
@@ -145,19 +176,29 @@ def api_rag_stream(req: Query):
     if req.session_id:
         session = get_session(req.session_id)
         if not session:
-            session = create_session(req.user_id, req.query[:50])
+            from src.database import get_db, _now
+            now = _now()
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO chat_session (session_id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)",
+                    (req.session_id, req.user_id, req.query[:50], now, now)
+                )
+        session_id = req.session_id
     else:
         session = create_session(req.user_id, req.query[:50])
-    session_id = session["session_id"]
+        session_id = session["session_id"]
 
     # 保存用户消息
     create_message(session_id, "USER", req.query)
+
+    # 构建历史上下文
+    history_context = build_history_context(session_id)
 
     # 包装生成器：在流结束后保存 AI 回复（含引用）
     def wrap_stream():
         answer_text = ""
         citations = []
-        for chunk_str in agent_framework_stream(req.query):
+        for chunk_str in agent_framework_stream(req.query, history_context):
             # 解析 chunk
             if chunk_str.startswith("data: "):
                 try:
