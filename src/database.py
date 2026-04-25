@@ -16,7 +16,7 @@ import uuid
 import threading
 import os
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from typing import Optional, List, Union
 
@@ -141,7 +141,7 @@ def init_db(db_path: Union[str, Path, None] = None):
 # ============================================================
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
 def _row_to_dict(row) -> dict:
