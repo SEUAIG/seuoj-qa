@@ -16,3 +16,4 @@ uvicorn
 uvloop
 httptools
 python-pptx
+camel-ai
