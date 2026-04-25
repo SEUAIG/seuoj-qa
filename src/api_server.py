@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, List, Literal
 import tempfile
@@ -16,7 +17,7 @@ from src.retrieval.retrieval import (
     pre_knowledge_search,
 )
 
-from src.agent import agent_framework, format_response
+from src.agent import agent_framework, agent_framework_stream, format_response
 
 from src.retrieval.qa_retrieval.qa_retrieval_advanced import (
     AdvancedQARetriever,
@@ -111,6 +112,20 @@ def api_rag(req: Query):
             "answer": answer,
             "citations": citations
     }
+
+
+@agent_router.post("/rag_answer_stream")
+def api_rag_stream(req: Query):
+    """流式版本：SSE 格式输出，每个 chunk 包含 type 和 text，最后一个 chunk 包含 citations"""
+    return StreamingResponse(
+        agent_framework_stream(req.query),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @agent_router.post("/pre_knowledge_search")

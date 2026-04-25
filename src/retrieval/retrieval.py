@@ -61,17 +61,11 @@ print("Docstore loaded:", len(docstore))
 
 DOC_BY_ID = {d["chunk_id"]: d for d in docstore}
 
-
-# ======================================================
-# 4. 构建 BM25
-# ======================================================
-
+# BM25 初始化（启动时 eager load）
 corpus_texts = [d["content"] for d in docstore]
 chunk_ids = [d["chunk_id"] for d in docstore]
-
 tokenized_corpus = [list(jieba.cut(t)) for t in corpus_texts]
 bm25 = BM25Okapi(tokenized_corpus)
-
 print("BM25 initialized!")
 
 

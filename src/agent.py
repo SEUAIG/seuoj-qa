@@ -1,10 +1,54 @@
 import json
-import os
+import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Tuple
 import yaml
 from datetime import datetime
+
+
+def parse_llm_json(content: str) -> dict:
+    """从 LLM 返回的内容中提取 JSON，处理 markdown fences 和控制字符。"""
+    # 去除 markdown code block 标记
+    content = re.sub(r"^```json\s*", "", content.strip())
+    content = re.sub(r"^```\s*", "", content.strip())
+    content = re.sub(r"\s*```$", "", content.strip())
+    # 去除控制字符（换行符、制表符之外的不可见控制字符）
+    content = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        # 宽松模式：把字符串值内未转义的换行符替换为 \n
+        # 思路是找到 JSON 中字符串值（"..." 内）里的裸换行，替换为 \n
+        result = []
+        i = 0
+        in_string = False
+        escaped = False
+        while i < len(content):
+            c = content[i]
+            if not in_string:
+                if c == '"':
+                    in_string = True
+                    result.append(c)
+                else:
+                    result.append(c)
+            else:
+                if escaped:
+                    result.append(c)
+                    escaped = False
+                elif c == '\\':
+                    result.append(c)
+                    escaped = True
+                elif c == '"':
+                    in_string = False
+                    result.append(c)
+                elif c in '\n\r':
+                    # 字符串值内未转义的换行 → 替换为转义的 \n
+                    result.append('\\n')
+                else:
+                    result.append(c)
+            i += 1
+        return json.loads("".join(result))
 
 try:
     import pandas as pd
@@ -16,15 +60,14 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent))
 
 # Import existing modules
-from retrieval.retrieval import faiss_search, bm25_search, pre_knowledge_search
+from retrieval.retrieval import faiss_search, bm25_search
 from retrieval.qa_retrieval.qa_retrieval_advanced import (
     AdvancedQARetriever,
     AdvancedRetrievalConfig,
 )
 
-from camel.agents import ChatAgent
-from camel.models import OpenAIModel
-from utils import renumber_citations, validate_citations, renumber_citations_both_formats
+from openai import OpenAI
+from utils import renumber_citations, renumber_citations_both_formats
 
 # 初始化题库检索器
 qa_retriever = AdvancedQARetriever(
@@ -40,28 +83,14 @@ def load_config():
 
 # Initialize LLM client
 CONFIG = load_config()
-LLM_PROVIDER = CONFIG["llm"][CONFIG["llm"]["use"]]
+LLM_PROVIDER = CONFIG["llm"]['siliconflow']
 
 def create_llm_client():
-    """Create LLM client using existing pattern"""
-    model_name = LLM_PROVIDER["model"]
-    api_key = LLM_PROVIDER["api_key"]
-    api_base = LLM_PROVIDER["api_base"].rstrip("/")
-
-    model_config = {
-        "temperature": LLM_PROVIDER.get("temperature"),
-        "top_p": LLM_PROVIDER.get("top_p"),
-        "max_tokens": LLM_PROVIDER.get("max_tokens")
-    }
-    model_config = {k: v for k, v in model_config.items() if v is not None}
-
-    model = OpenAIModel(
-        model_type=model_name,
-        model_config_dict=model_config,
-        api_key=api_key,
-        url=api_base
+    """Create OpenAI-compatible LLM client"""
+    return OpenAI(
+        api_key=LLM_PROVIDER["api_key"],
+        base_url=LLM_PROVIDER["api_base"].rstrip("/")
     )
-    return model
 
 LLM_CLIENT = create_llm_client()
 
@@ -69,42 +98,6 @@ LLM_CLIENT = create_llm_client()
 # ================================
 # Agent Prompts
 # ================================
-
-PLANNER_PROMPT = """你是一个专业的问答任务规划助手。你的职责是分析用户问题，制定详细的执行计划。
-
-你必须：
-1. 将复杂问题分解为具体的子任务
-2. 为每个子任务选择合适的检索工具（faiss_search 或 bm25_search）
-3. 制定验证策略
-
-输出格式必须是严格的 JSON：
-
-{
-  "task_decomposition": [
-    "子任务1：明确需要查找的信息",
-    "子任务2：补充相关背景知识",
-    "子任务3：整合答案"
-  ],
-  "executor_plan": [
-    {
-      "step_id": 1,
-      "action": "faiss_search",
-      "query": "具体的检索查询词",
-      "top_k": 10
-    }
-  ],
-  "verifier_plan": {
-    "check_coverage": true,
-    "check_citation": true,
-    "check_consistency": true
-  }
-}
-
-注意：
-- action 只能是 "faiss_search", "bm25_search" 或 "synthesize_answer"
-- 最后一步必须包含 "synthesize_answer"
-- 确保查询词准确反映子任务需求
-"""
 
 EXECUTOR_SYNTHESIZE_PROMPT = """你是一个专业的答案合成助手。请基于检索到的证据生成准确、有用的答案。
 
@@ -124,27 +117,17 @@ Observations：
 {observations}
 """
 
-VERIFIER_PROMPT = """你是一个专业的答案质量验证助手。请评估答案是否满足用户需求。
+EXECUTOR_SYNTHESIZE_PROMPT_STREAM = """你是一个专业的答案合成助手。请基于检索到的证据生成准确、有用的答案。
 
-评估维度：
-1. 充分性：是否完全回答了用户问题
-2. 准确性：内容是否基于检索到的证据
-3. 引用正确性：引用是否准确对应
-4. 一致性：答案内部是否自洽
+要求：
+1. 严格基于提供的 observations 生成答案
+2. 不得添加任何未在 observations 中的信息
+3. 保持逻辑清晰，层次分明
+4. 在适当位置标注引用编号 [1], [2] 等，不要都放在最后
+5. 直接输出答案文本即可，不要输出 JSON 格式
 
-输出严格 JSON：
-{
-  "is_sufficient": true/false,
-  "missing_aspects": ["缺少的方面1", "缺少的方面2"],
-  "has_hallucination": true/false,
-  "has_citation_error": true/false,
-  "next_action": "accept" 或 "replan"
-}
-
-用户问题：{user_query}
-候选答案：{final_answer}
-使用引用：{used_citations}
-检索证据：{observations}
+Observations：
+{observations}
 """
 
 
@@ -167,304 +150,165 @@ def log_agent(agent_name: str, message: str, data: Any = None):
 # Core Agent Functions
 # ================================
 
-def run_planner(user_query: str) -> Dict[str, Any]:
+def agent_framework_stream(user_query: str):
     """
-    Run the Planner agent to decompose the query and create execution plan
-
-    Args:
-        user_query: Original user query
-
-    Returns:
-        Planner's output as dictionary with task_decomposition, executor_plan, verifier_plan
+    流式版本：先完整生成答案，再逐chunk流式输出，最后发 citations。
+    每个 chunk 格式为 SSE: "data: {...}\n\n"
     """
-    log_agent("PLANNER", "Starting query planning", f"Query: {user_query}")
+    import json
+    import re
+    from concurrent.futures import ThreadPoolExecutor
 
+    log_agent("CONTROLLER", "Starting streaming execution", f"Query: {user_query}")
+
+    # 并行检索
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        faiss_future = pool.submit(faiss_search, user_query, 5)
+        bm25_future = pool.submit(bm25_search, user_query, 5)
+        faiss_docs = faiss_future.result()
+        bm25_docs = bm25_future.result()
+
+    all_docs = faiss_docs + bm25_docs
+
+    # 构建 observations（用于 build_citation_display_index）
+    observations = [
+        {"step_id": 1, "action": "faiss_search", "query": user_query, "results": faiss_docs},
+        {"step_id": 2, "action": "bm25_search", "query": user_query, "results": bm25_docs},
+    ]
+
+    # 去重
+    unique_docs = {}
+    for doc in all_docs:
+        chunk_id = doc.get("chunk_id")
+        if chunk_id not in unique_docs:
+            unique_docs[chunk_id] = doc
+
+    # 格式化 observations
+    MAX_CONTENT_LEN = 300
+    formatted_observations = []
+    for i, (_, doc) in enumerate(unique_docs.items(), 1):
+        content = doc.get('content', '')
+        if len(content) > MAX_CONTENT_LEN:
+            content = content[:MAX_CONTENT_LEN] + "..."
+        obs_str = f"[{i}] 标题：{doc.get('title', '')}\n章节：{doc.get('path_titles', [])}\n内容：{content}"
+        formatted_observations.append(obs_str)
+
+    observations_text = "\n\n".join(formatted_observations)
+
+    # 流式调用 LLM（纯文本输出，不含 JSON）
+    messages = [
+        {"role": "system", "content": EXECUTOR_SYNTHESIZE_PROMPT_STREAM},
+        {"role": "user", "content": f"Observations：\n{observations_text}"}
+    ]
+
+    log_agent("EXECUTOR", "Streaming answer")
+    stream = LLM_CLIENT.chat.completions.create(
+        model=LLM_PROVIDER["model"],
+        messages=messages,
+        temperature=LLM_PROVIDER.get("temperature", 0.85),
+        max_tokens=LLM_PROVIDER.get("max_tokens", 4000),
+        stream=True
+    )
+
+    # 边吐 token 边 yield，累积文本用于后续解析 citations
+    answer_text = ""
+    for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            answer_text += content
+            yield f"data: {json.dumps({'type': 'content', 'text': content}, ensure_ascii=False)}\n\n"
+
+    # 答案生成完毕，解析 citations（从 answer 全文提取 [n] 引用编号）
+    raw_citations = list(range(1, len(unique_docs) + 1))
     try:
-        agent = ChatAgent(PLANNER_PROMPT, model=LLM_CLIENT)
+        found = set(int(m) for m in re.findall(r'\[(\d+)\]', answer_text))
+        raw_citations = list(found) if found else list(range(1, len(unique_docs) + 1))
+    except Exception:
+        pass
 
-        user_prompt = f"用户问题：{user_query}\n\n请生成执行计划："
-        response = agent.step(user_prompt)
+    _, used_citations = renumber_citations(answer_text, raw_citations)
 
-        # Parse JSON response
-        result = json.loads(response.msg.content)
-        log_agent("PLANNER", "Planning completed", result)
-        return result
+    # 构建 citation 详情（书名、章节）
+    response = {"observations": observations}
+    display_index = build_citation_display_index(response)
+    citations_display = [display_index.get(cid, "") for cid in used_citations]
 
-    except Exception as e:
-        log_agent("PLANNER", f"Error occurred: {str(e)}")
-        # Fallback plan
-        return {
-            "task_decomposition": ["直接检索答案"],
-            "executor_plan": [
-                {"step_id": 1, "action": "faiss_search", "query": user_query, "top_k": 10},
-                {"step_id": 2, "action": "bm25_search", "query": user_query, "top_k": 10},
-                {"step_id": 3, "action": "synthesize_answer"}
-            ],
-            "verifier_plan": {
-                "check_coverage": True,
-                "check_citation": True,
-                "check_consistency": True
-            }
-        }
+    # 最后发送 citations
+    yield f"data: {json.dumps({'type': 'done', 'citations': citations_display}, ensure_ascii=False)}\n\n"
+    log_agent("CONTROLLER", "Stream finished")
 
-
-def run_executor(executor_plan: List[Dict], user_query: str = "") -> Dict[str, Any]:
+def agent_framework(user_query: str) -> Dict[str, Any]:
     """
-    Execute the plan generated by the Planner
-
-    Args:
-        executor_plan: List of execution steps
-        user_query: Original user query (for fallback LLM answer)
-
-    Returns:
-        Dictionary with observations, final_answer, and used_citations
+    Main controller — 直接执行，跳过 PLANNER 和 VERIFIER 以节省时间。
+    faiss_search 和 bm25_search 并行执行以节省检索时间。
     """
-    log_agent("EXECUTOR", "Starting execution", f"Steps: {len(executor_plan)}")
+    from concurrent.futures import ThreadPoolExecutor
 
+    log_agent("CONTROLLER", "Starting direct execution", f"Query: {user_query}")
+
+    # 并行执行 faiss + bm25 检索
     observations = []
     all_docs = []
-    final_answer = ""
-    used_citations = []
 
-    try:
-        for step in executor_plan:
-            step_id = step.get("step_id", 0)
-            action = step.get("action", "")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        faiss_future = pool.submit(faiss_search, user_query, 5)
+        bm25_future = pool.submit(bm25_search, user_query, 5)
 
-            if action == "faiss_search":
-                query = step.get("query", "")
-                top_k = step.get("top_k", 10)
-                docs = faiss_search(query, top_k)
+        faiss_docs = faiss_future.result()
+        bm25_docs = bm25_future.result()
 
-                observation = {
-                    "step_id": step_id,
-                    "action": action,
-                    "query": query,
-                    "results": docs
-                }
-                observations.append(observation)
-                all_docs.extend(docs)
+    observations.append({"step_id": 1, "action": "faiss_search", "query": user_query, "results": faiss_docs})
+    observations.append({"step_id": 2, "action": "bm25_search", "query": user_query, "results": bm25_docs})
+    all_docs.extend(faiss_docs)
+    all_docs.extend(bm25_docs)
 
-                log_agent("EXECUTOR", f"Step {step_id}: FAISS search", f"Query: {query}, Results: {len(docs)}")
+    log_agent("EXECUTOR", f"Hybrid search done", f"faiss={len(faiss_docs)}, bm25={len(bm25_docs)}")
 
-            elif action == "bm25_search":
-                query = step.get("query", "")
-                top_k = step.get("top_k", 10)
-                docs = bm25_search(query, top_k)
+    # Deduplicate
+    unique_docs = {}
+    for doc in all_docs:
+        chunk_id = doc.get("chunk_id")
+        if chunk_id not in unique_docs:
+            unique_docs[chunk_id] = doc
 
-                observation = {
-                    "step_id": step_id,
-                    "action": action,
-                    "query": query,
-                    "results": docs
-                }
-                observations.append(observation)
-                all_docs.extend(docs)
+    # Format observations for LLM (截断每条 content 减少 token)
+    MAX_CONTENT_LEN = 300
+    formatted_observations = []
+    for i, (_, doc) in enumerate(unique_docs.items(), 1):
+        content = doc.get('content', '')
+        if len(content) > MAX_CONTENT_LEN:
+            content = content[:MAX_CONTENT_LEN] + "..."
+        obs_str = f"[{i}] 标题：{doc.get('title', '')}\n"
+        obs_str += f"章节：{doc.get('path_titles', [])}\n"
+        obs_str += f"内容：{content}"
+        formatted_observations.append(obs_str)
 
-                log_agent("EXECUTOR", f"Step {step_id}: BM25 search", f"Query: {query}, Results: {len(docs)}")
+    observations_text = "\n\n".join(formatted_observations)
 
-            elif action == "synthesize_answer":
-                # Synthesize answer from observations
-                log_agent("EXECUTOR", "Step {step_id}: Synthesizing answer")
+    # Synthesize
+    log_agent("EXECUTOR", "Synthesizing answer")
+    messages = [
+        {"role": "system", "content": EXECUTOR_SYNTHESIZE_PROMPT},
+        {"role": "user", "content": f"Observations：\n{observations_text}"}
+    ]
+    resp = LLM_CLIENT.chat.completions.create(
+        model=LLM_PROVIDER["model"],
+        messages=messages,
+        temperature=LLM_PROVIDER.get("temperature", 0.85),
+        max_tokens=LLM_PROVIDER.get("max_tokens", 4000)
+    )
+    synthesis_result = parse_llm_json(resp.choices[0].message.content)
+    final_answer = synthesis_result.get("answer", "")
+    raw_citations = synthesis_result.get("citations", list(range(1, len(unique_docs) + 1)))
 
-                # Deduplicate documents by chunk_id
-                unique_docs = {}
-                for doc in all_docs:
-                    chunk_id = doc.get("chunk_id")
-                    if chunk_id not in unique_docs:
-                        unique_docs[chunk_id] = doc
+    final_answer, used_citations = renumber_citations(final_answer, raw_citations)
 
-                # Format observations for LLM
-                formatted_observations = []
-                for i, (cid, doc) in enumerate(unique_docs.items(), 1):
-                    obs_str = f"[{i}] 标题：{doc.get('title', '')}\n"
-                    obs_str += f"章节：{doc.get('path_titles', [])}\n"
-                    obs_str += f"内容：{doc.get('content', '')}"
-                    formatted_observations.append(obs_str)
-
-                observations_text = "\n\n".join(formatted_observations)
-
-                # Call LLM to synthesize
-                agent = ChatAgent(EXECUTOR_SYNTHESIZE_PROMPT, model=LLM_CLIENT)
-                user_prompt = f"Observations：\n{observations_text}"
-                response = agent.step(user_prompt)
-
-                # Parse synthesis result
-                synthesis_result = json.loads(response.msg.content)
-                final_answer = synthesis_result.get("answer", "")
-                raw_citations = synthesis_result.get("citations", list(range(1, len(unique_docs) + 1)))
-
-                # 重新编号引用，确保从1开始连续
-                final_answer, used_citations = renumber_citations(final_answer, raw_citations)
-
-                log_agent("EXECUTOR", "Answer synthesized", f"Raw citations: {raw_citations}")
-                log_agent("EXECUTOR", "Renumbered citations", f"New citations: {used_citations}")
-
-        return {
-            "observations": observations,
-            "final_answer": final_answer,
-            "used_citations": used_citations
-        }
-
-    except Exception as e:
-        log_agent("EXECUTOR", f"Error occurred: {str(e)}")
-
-        # Fallback: 直接调用 LLM 回答问题
-        if user_query:
-            try:
-                log_agent("EXECUTOR", "Using fallback LLM to answer directly")
-                fallback_prompt = f"""请直接回答以下问题。如果不确定，请诚实地说明。
-
-问题：{user_query}
-
-请提供准确、有用的答案。"""
-                agent = ChatAgent("你是一个专业的问答助手。", model=LLM_CLIENT)
-                response = agent.step(fallback_prompt)
-                fallback_answer = response.msg.content
-
-                return {
-                    "observations": observations,
-                    "final_answer": fallback_answer,
-                    "used_citations": [],
-                    "fallback": True
-                }
-            except Exception as fallback_error:
-                log_agent("EXECUTOR", f"Fallback LLM also failed: {str(fallback_error)}")
-
-        return {
-            "observations": observations,
-            "final_answer": "抱歉，生成答案时遇到错误。",
-            "used_citations": []
-        }
-
-
-def run_verifier(user_query: str, final_answer: str, used_citations: List[int],
-                 observations: List[Dict]) -> Dict[str, Any]:
-    """
-    Verify the quality and completeness of the generated answer
-
-    Args:
-        user_query: Original user query
-        final_answer: Generated answer from executor
-        used_citations: List of citation indices used
-        observations: Raw observations from executor
-
-    Returns:
-        Verification result dictionary
-    """
-    log_agent("VERIFIER", "Starting verification")
-
-    try:
-        agent = ChatAgent(VERIFIER_PROMPT, model=LLM_CLIENT)
-
-        # Format observations for verification
-        obs_summary = []
-        for obs in observations:
-            if obs.get("action") in ["faiss_search", "bm25_search"]:
-                obs_summary.append({
-                    "query": obs.get("query", ""),
-                    "result_count": len(obs.get("results", []))
-                })
-
-        user_prompt = VERIFIER_PROMPT.format(
-            user_query=user_query,
-            final_answer=final_answer,
-            used_citations=used_citations,
-            observations=json.dumps(obs_summary, ensure_ascii=False)
-        )
-
-        response = agent.step(user_prompt)
-        result = json.loads(response.msg.content)
-
-        log_agent("VERIFIER", "Verification completed", result)
-        return result
-
-    except Exception as e:
-        log_agent("VERIFIER", f"Error occurred: {str(e)}")
-        # Fallback to accept
-        return {
-            "is_sufficient": True,
-            "missing_aspects": [],
-            "has_hallucination": False,
-            "has_citation_error": False,
-            "next_action": "accept"
-        }
-
-
-def agent_framework(user_query: str, max_iterations: int = 3) -> Dict[str, Any]:
-    """
-    Main controller that orchestrates the PEV framework
-
-    Args:
-        user_query: User's input query
-        max_iterations: Maximum number of replanning cycles (default: 3)
-
-    Returns:
-        Final answer and metadata
-    """
-    log_agent("CONTROLLER", "Starting PEV framework", f"Query: {user_query}")
-
-    iteration = 0
-    missing_aspects = []
-
-    while iteration < max_iterations:
-        iteration += 1
-        log_agent("CONTROLLER", f"Iteration {iteration}")
-
-        # 1. Planning phase
-        if iteration == 1:
-            plan_input = user_query
-        else:
-            # Add missing aspects to query
-            plan_input = f"{user_query}\n\n需要补充的方面：{', '.join(missing_aspects)}"
-
-        planner_result = run_planner(plan_input)
-        executor_plan = planner_result.get("executor_plan", [])
-
-        # 2. Execution phase
-        executor_result = run_executor(executor_plan, user_query)
-        final_answer = executor_result.get("final_answer", "")
-        used_citations = executor_result.get("used_citations", [])
-        observations = executor_result.get("observations", [])
-
-        # 3. Verification phase
-        verifier_result = run_verifier(
-            user_query, final_answer, used_citations, observations
-        )
-
-        # 4. Decision
-        next_action = verifier_result.get("next_action", "accept")
-
-        if next_action == "accept":
-            log_agent("CONTROLLER", "Answer accepted", f"Total iterations: {iteration}")
-            return {
-                "final_answer": final_answer,
-                "used_citations": used_citations,
-                "iterations": iteration,
-                "verification": verifier_result,
-                "observations": observations
-            }
-        else:
-            missing_aspects = verifier_result.get("missing_aspects", [])
-            log_agent("CONTROLLER", "Replanning needed", f"Missing: {missing_aspects}")
-
-            if iteration >= max_iterations:
-                log_agent("CONTROLLER", "Max iterations reached, returning current answer")
-                return {
-                    "final_answer": final_answer + "\n\n注意：可能存在以下未充分覆盖的方面：" +
-                                   ", ".join(missing_aspects),
-                    "used_citations": used_citations,
-                    "iterations": iteration,
-                    "verification": verifier_result,
-                    "observations": observations
-                }
-
+    log_agent("CONTROLLER", "Answer ready")
     return {
-        "final_answer": "未找到有效答案",
-        "used_citations": [],
-        "iterations": iteration,
-        "verification": {},
-        "observations": []
+        "final_answer": final_answer,
+        "used_citations": used_citations,
+        "iterations": 1,
+        "observations": observations
     }
 
 

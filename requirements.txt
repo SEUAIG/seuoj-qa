@@ -1,12 +1,12 @@
 # Auto-generated minimal requirements
 aiohttp
-camel-ai
 dataclasses
 fastapi
 jieba
 langchain-core
 loguru
 numpy
+openai
 pandas
 pydantic
 requests
