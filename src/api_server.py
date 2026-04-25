@@ -84,6 +84,8 @@ app.add_middleware(
 class Query(BaseModel):
     query: str
     top_k: int = 10
+    session_id: Optional[str] = None
+    user_id: Optional[str] = "default"
 
 
 # ---------- Root ----------
@@ -105,20 +107,79 @@ def api_bm25(req: Query):
 
 @agent_router.post("/rag_answer")
 def api_rag(req: Query):
+    # 获取或创建会话
+    if req.session_id:
+        session = get_session(req.session_id)
+        if not session:
+            session = create_session(req.user_id, req.query[:50])
+    else:
+        session = create_session(req.user_id, req.query[:50])
+
+    session_id = session["session_id"]
+
+    # 保存用户消息
+    create_message(session_id, "USER", req.query)
+
+    # 调用 RAG
     response = agent_framework(req.query)
     answer, citations = format_response(response)
 
+    # 保存 AI 回复（含引用）
+    create_assistant_message_with_citations(
+        session_id=session_id,
+        content=answer,
+        citations=citations,
+    )
+
     return {
             "answer": answer,
-            "citations": citations
+            "citations": citations,
+            "session_id": session_id,
     }
 
 
 @agent_router.post("/rag_answer_stream")
 def api_rag_stream(req: Query):
     """流式版本：SSE 格式输出，每个 chunk 包含 type 和 text，最后一个 chunk 包含 citations"""
+    # 获取或创建会话
+    if req.session_id:
+        session = get_session(req.session_id)
+        if not session:
+            session = create_session(req.user_id, req.query[:50])
+    else:
+        session = create_session(req.user_id, req.query[:50])
+    session_id = session["session_id"]
+
+    # 保存用户消息
+    create_message(session_id, "USER", req.query)
+
+    # 包装生成器：在流结束后保存 AI 回复（含引用）
+    def wrap_stream():
+        answer_text = ""
+        citations = []
+        for chunk_str in agent_framework_stream(req.query):
+            # 解析 chunk
+            if chunk_str.startswith("data: "):
+                try:
+                    import json
+                    data = json.loads(chunk_str[6:])
+                    if data.get("type") == "content":
+                        answer_text += data.get("text", "")
+                    elif data.get("type") == "done":
+                        citations = data.get("citations", [])
+                except Exception:
+                    pass
+            yield chunk_str
+        # 流结束后保存 AI 回复
+        if answer_text:
+            create_assistant_message_with_citations(
+                session_id=session_id,
+                content=answer_text,
+                citations=citations,
+            )
+
     return StreamingResponse(
-        agent_framework_stream(req.query),
+        wrap_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
