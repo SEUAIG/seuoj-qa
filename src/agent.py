@@ -1,10 +1,21 @@
 import json
 import re
 import sys
+import os
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
 import yaml
 from datetime import datetime
+
+
+# ================================
+# Prompt 模板加载
+# ================================
+_CONFIG_DIR = os.path.join(Path(__file__).parent.parent, "config")
+_PROMPTS_PATH = os.path.join(_CONFIG_DIR, "prompts.yaml")
+
+with open(_PROMPTS_PATH, "r", encoding="utf-8") as f:
+    _AGENT_PROMPTS = yaml.safe_load(f)["prompts"]["agent"]
 
 
 def parse_llm_json(content: str) -> dict:
@@ -99,36 +110,8 @@ LLM_CLIENT = create_llm_client()
 # Agent Prompts
 # ================================
 
-EXECUTOR_SYNTHESIZE_PROMPT = """你是一个专业的答案合成助手。请基于检索到的证据生成准确、有用的答案。
-
-要求：
-1. 严格基于提供的 observations 生成答案
-2. 不得添加任何未在 observations 中的信息
-3. 保持逻辑清晰，层次分明
-4. 在适当位置标注引用编号 [1], [2] 等,不要都放在最后
-
-输出格式：
-{
-  "answer": "生成的答案内容，包含引用标注",
-  "citations": [1, 2, 3]
-}
-
-Observations：
-{observations}
-"""
-
-EXECUTOR_SYNTHESIZE_PROMPT_STREAM = """你是一个专业的答案合成助手。请基于检索到的证据生成准确、有用的答案。
-
-要求：
-1. 严格基于提供的 observations 生成答案
-2. 不得添加任何未在 observations 中的信息
-3. 保持逻辑清晰，层次分明
-4. 在适当位置标注引用编号 [1], [2] 等，不要都放在最后
-5. 直接输出答案文本即可，不要输出 JSON 格式
-
-Observations：
-{observations}
-"""
+EXECUTOR_SYNTHESIZE_PROMPT = _AGENT_PROMPTS["executor_synthesize"]["template"]
+EXECUTOR_SYNTHESIZE_PROMPT_STREAM = _AGENT_PROMPTS["executor_synthesize_stream"]["template"]
 
 
 # ================================
@@ -232,10 +215,10 @@ def agent_framework_stream(user_query: str, history_context: str = ""):
 
     _, used_citations = renumber_citations(answer_text, raw_citations)
 
-    # 构建 citation 详情（书名、章节）
+    # 构建 citation 详情（title、chapter、content）
     response = {"observations": observations}
     display_index = build_citation_display_index(response)
-    citations_display = [display_index.get(cid, "") for cid in used_citations]
+    citations_display = [display_index.get(cid, {}) for cid in used_citations]
 
     # 最后发送 citations
     yield f"data: {json.dumps({'type': 'done', 'citations': citations_display}, ensure_ascii=False)}\n\n"
@@ -323,12 +306,12 @@ def agent_framework(user_query: str, history_context: str = "") -> Dict[str, Any
 # ================================
 # CLI Interface
 # ================================
-def build_citation_display_index(response: Dict[str, Any]) -> Dict[int, str]:
+def build_citation_display_index(response: Dict[str, Any]) -> Dict[int, Dict[str, str]]:
     """
-    citation_id -> "《书名》 · title"
+    citation_id -> {title, chapter, content}
     citation_id 按 observations.results 首次出现的 chunk 去重顺序递增
     """
-    idx: Dict[int, str] = {}
+    idx: Dict[int, Dict[str, str]] = {}
     seen_chunk_ids = set()
     citation_id = 1
 
@@ -340,9 +323,14 @@ def build_citation_display_index(response: Dict[str, Any]) -> Dict[int, str]:
 
             meta = r.get("metadata", {}) or {}
             book = meta.get("title") or meta.get("source") or "未知来源"
-            title = r.get("title") or "未命名条目"
+            chapter = r.get("title") or "未命名条目"
+            content = r.get("content", "")
 
-            idx[citation_id] = f"《{book}》-{title}"
+            idx[citation_id] = {
+                "title": f"《{book}》",
+                "chapter": chapter,
+                "content": content
+            }
 
             seen_chunk_ids.add(chunk_id)
             citation_id += 1
@@ -350,7 +338,7 @@ def build_citation_display_index(response: Dict[str, Any]) -> Dict[int, str]:
     return idx
 
 
-def format_response(response: Dict[str, Any]) -> Tuple[str, List[str]]:
+def format_response(response: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
     answer = response.get("final_answer", "")
     used = response.get("used_citations", [])
 

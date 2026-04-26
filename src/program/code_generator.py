@@ -1,412 +1,5 @@
-# """
-# 基于题目+伪代码，生成正确代码 + 测试用例
-
-# def code_generator(problem_description: str, pseudo_code: str, language: str) -> Tuple[str, List[Tuple]]:
-#     # 基于react框架，调用llm api生成代码和测试用例
-
-#     code, test_cases = generate_code(problem_description, pseudo_code, language)
-
-#     return code, test_cases
-
-
-# """
-
-# import re
-# import requests
-# from typing import Dict
-
-# def strip_markdown_code_block(text: str) -> str:
-#     if not text:
-#         return text
-
-#     text = text.strip()
-#     text = re.sub(r"^```[^\n]*\n", "", text)
-#     text = re.sub(r"\n```$", "", text)
-#     return text.strip()
-
-# # =========================
-# # LLM API 封装
-# # =========================
-# class LLMClient:
-#     def __init__(self):
-#         self.api_key = "sk-zeBMnqw4L58EseM8nxCRvO4Iqz7kO6rmrxU5hQOmktKCBhOJ"
-#         self.api_base = "https://www.dmxapi.cn/v1"
-#         self.model = "gpt-4o-mini"
-#         self.temperature = 0.3
-#         self.top_p = 0.9
-
-#     def chat(self, messages):
-#         url = f"{self.api_base}/chat/completions"
-
-#         headers = {
-#             "Authorization": f"Bearer {self.api_key}",
-#             "Content-Type": "application/json",
-#         }
-
-#         payload = {
-#             "model": self.model,
-#             "messages": messages,
-#             "temperature": self.temperature,
-#             "top_p": self.top_p,
-#         }
-
-#         response = requests.post(url, headers=headers, json=payload, timeout=120)
-#         response.raise_for_status()
-
-#         return response.json()["choices"][0]["message"]["content"]
-
-
-# # =========================
-# # Code Generation Agent
-# # =========================
-# class CodeGenAgent:
-#     def __init__(self):
-#         self.llm = LLMClient()
-
-#     def run(self, problem_description: str, user_solution: str, language: str) -> Dict[str, str]:
-#         """
-#         返回：
-#         {
-#             "solution_understanding": 对用户解答的结构化理解,
-#             "code": 按用户解答生成的核心函数代码,
-#             "test_code": 按用户解答生成的完整测试代码,
-#             "suggestion": 对当前解法的优化建议,
-#             "best_code": 最优解核心函数代码,
-#             "best_test_code": 最优解完整测试代码
-#         }
-#         """
-#         # Step 1: 理解用户解答（兼容伪代码 / 文字解法）
-#         solution_understanding = self._understand_solution(problem_description, user_solution)
-
-#         # Step 2: 分析实现逻辑
-#         thought = self._reason(problem_description, solution_understanding)
-
-#         # Step 3: 按用户解答生成代码
-#         code = self._generate_code(problem_description, solution_understanding, thought, language)
-
-#         # Step 4: 生成测试代码
-#         test_code = self._generate_test_code(problem_description, solution_understanding, code, language)
-
-#         # Step 5: 生成优化建议
-#         suggestion = self._generate_suggestion(problem_description, solution_understanding, code, language)
-
-#         # Step 6: 生成最优解代码
-#         best_code = self._generate_best_code(problem_description, solution_understanding, language)
-
-#         # Step 7: 生成最优解测试代码
-#         best_test_code = self._generate_best_test_code(problem_description, best_code, language)
-
-#         return {
-#             "solution_understanding": solution_understanding,
-#             "code": code,
-#             "test_code": test_code,
-#             "suggestion": suggestion,
-#             "best_code": best_code,
-#             "best_test_code": best_test_code,
-#         }
-
-#     # =========================
-#     # Step 1: 理解用户解答
-#     # =========================
-#     def _understand_solution(self, problem_description: str, user_solution: str) -> str:
-#         prompt = f"""
-# 你是一个算法理解专家。
-
-# 用户给出的“解答”可能是：
-# 1. 伪代码
-# 2. 文字版题解
-# 3. 伪代码和文字混合
-# 4. 不太规范但表达了解题步骤
-
-# 你的任务：
-# - 准确理解用户的解题思路
-# - 整理成结构化算法说明
-# - 不要优化，不要擅自替换成更优解
-# - 如果用户表述不够规范，请在不改变核心思路的前提下合理补全
-
-# 输出格式：
-# 1. 输入输出
-# 2. 核心思路
-# 3. 算法步骤
-# 4. 边界条件
-# 5. 实现注意事项
-
-# 题目：
-# {problem_description}
-
-# 用户解答：
-# {user_solution}
-# """
-#         return self.llm.chat([
-#             {"role": "system", "content": "严谨的算法理解专家"},
-#             {"role": "user", "content": prompt}
-#         ])
-
-#     # =========================
-#     # Step 2: 分析
-#     # =========================
-#     def _reason(self, problem_description: str, solution_understanding: str) -> str:
-#         prompt = f"""
-# 你是一个算法分析专家。
-
-# 任务：
-# 基于“整理后的用户解答”分析实现逻辑。
-
-# 要求：
-# - 不写代码
-# - 不优化逻辑
-# - 严格按照用户解答来理解
-
-# 输出：
-# 1. 输入输出
-# 2. 算法流程
-# 3. 实现细节
-# 4. 边界情况
-
-# 题目：
-# {problem_description}
-
-# 整理后的用户解答：
-# {solution_understanding}
-# """
-#         return self.llm.chat([
-#             {"role": "system", "content": "严谨的算法分析专家"},
-#             {"role": "user", "content": prompt}
-#         ])
-
-#     # =========================
-#     # Step 3: 生成按用户解答实现的代码
-#     # =========================
-#     def _generate_code(self, problem_description: str, solution_understanding: str, thought: str, language: str) -> str:
-#         prompt = f"""
-# 你是一个“受控代码生成器”。
-
-# ⚠️ 强约束：
-# - 必须严格按照用户解答实现
-# - 禁止擅自优化或替换成更优解
-# - 只实现核心函数，不写 main
-# - 代码必须可运行
-# - 要自动补全必要的类型、导入、函数签名
-
-# 语言：{language}
-
-# 题目：
-# {problem_description}
-
-# 整理后的用户解答：
-# {solution_understanding}
-
-# 分析：
-# {thought}
-
-# 输出要求：
-# - 只输出代码
-# - 不要解释
-# """
-#         result =self.llm.chat([
-#             {"role": "system", "content": "严格代码生成器"},
-#             {"role": "user", "content": prompt}
-#         ])
-#         return strip_markdown_code_block(result)
-
-#     # =========================
-#     # Step 4: 生成测试代码
-#     # =========================
-#     def _generate_test_code(self, problem_description: str, solution_understanding: str, code: str, language: str) -> str:
-#         prompt = f"""
-# 你是一个测试工程师。
-
-# 任务：
-# 基于当前核心函数代码，生成完整测试程序。
-
-# ⚠️ 要求：
-# - 必须生成完整可运行程序
-# - 必须包含 main 函数（或等价入口）
-# - 测试多个 case
-# - 打印结果
-# - 覆盖正常情况与边界情况
-
-# 语言：{language}
-
-# 题目：
-# {problem_description}
-
-# 整理后的用户解答：
-# {solution_understanding}
-
-# 核心代码：
-# {code}
-
-# 输出要求：
-# - 只输出完整代码（包含 main）
-# - 不解释
-# """
-#         result = self.llm.chat([
-#             {"role": "system", "content": "测试代码生成专家"},
-#             {"role": "user", "content": prompt}
-#         ])
-#         return strip_markdown_code_block(result)
-
-#     # =========================
-#     # Step 5: 优化建议
-#     # =========================
-#     def _generate_suggestion(self, problem_description: str, solution_understanding: str, code: str, language: str) -> str:
-#         prompt = f"""
-# 你是一个算法优化顾问。
-
-# 任务：
-# 分析当前这份代码是否是最优解，并给出建议。
-
-# 输出内容必须包含：
-# 1. 当前解法的时间复杂度
-# 2. 当前解法的空间复杂度
-# 3. 是否存在更优解
-# 4. 如果不是最优，应该从哪里思考修改
-# 5. 优化方向是什么
-# 6. 当前解法适合什么场景
-
-# 要求：
-# - 不要直接输出完整优化代码
-# - 建议要具体
-# - 如果已经接近最优，也请明确说明原因
-
-# 题目：
-# {problem_description}
-
-# 用户解答整理：
-# {solution_understanding}
-
-# 当前代码：
-# {code}
-
-# 语言：
-# {language}
-# """
-#         return self.llm.chat([
-#             {"role": "system", "content": "资深算法优化顾问"},
-#             {"role": "user", "content": prompt}
-#         ])
-
-#     # =========================
-#     # Step 6: 最优解代码
-#     # =========================
-#     def _generate_best_code(self, problem_description: str, solution_understanding: str, language: str) -> str:
-#         prompt = f"""
-# 你是一个算法竞赛专家。
-
-# 任务：
-# 针对题目生成最佳解法代码。
-
-# 要求：
-# - 不受用户原始解答限制
-# - 直接采用更优的时间复杂度/空间复杂度方案
-# - 如果没有更优解，则给出公认最佳实践
-# - 只输出核心函数，不写 main
-# - 代码必须可运行
-# - 补全必要导入、类型、函数签名
-
-# 语言：{language}
-
-# 题目：
-# {problem_description}
-
-# 用户解答整理（仅用于理解题意）：
-# {solution_understanding}
-
-# 输出要求：
-# - 只输出代码
-# - 不要解释
-# """
-#         result = self.llm.chat([
-#             {"role": "system", "content": "最优算法代码生成专家"},
-#             {"role": "user", "content": prompt}
-#         ])
-#         return  strip_markdown_code_block(result)
-
-#     # =========================
-#     # Step 7: 最优解测试代码
-#     # =========================
-#     def _generate_best_test_code(self, problem_description: str, best_code: str, language: str) -> str:
-#         prompt = f"""
-# 你是一个测试工程师。
-
-# 任务：
-# 基于最佳解代码，生成完整测试程序。
-
-# ⚠️ 要求：
-# - 必须生成完整可运行程序
-# - 必须包含 main 函数（或等价入口）
-# - 测试多个 case
-# - 打印结果
-# - 覆盖正常情况和边界情况
-
-# 语言：{language}
-
-# 题目：
-# {problem_description}
-
-# 最佳解代码：
-# {best_code}
-
-# 输出要求：
-# - 只输出完整代码（包含 main）
-# - 不解释
-# """
-#         result = self.llm.chat([
-#             {"role": "system", "content": "最佳解测试代码生成专家"},
-#             {"role": "user", "content": prompt}
-#         ])
-#         return strip_markdown_code_block(result)
-
-
-# # =========================
-# # 外部接口
-# # =========================
-# def generate_code(problem_description: str, user_solution: str, language: str) -> Dict[str, str]:
-#     agent = CodeGenAgent()
-#     return agent.run(problem_description, user_solution, language)
-
-
-# def code_generator(problem_description: str, user_solution: str, language_button: str) -> Dict[str, str]:
-#     return generate_code(problem_description, user_solution, language_button)
-
-
-# # =========================
-# # Example
-# # =========================
-# if __name__ == "__main__":
-#     problem = "给定一个数组，使用冒泡排序排序"
-
-#     # 用户只传一个“解答”即可，可以是伪代码，也可以是文字描述
-#     user_solution = """
-# 一种简单做法是重复遍历数组。
-# 每次比较相邻两个元素，如果前一个比后一个大，就交换它们。
-# 这样每一轮都会把当前最大的元素移动到末尾。
-# 重复多轮之后数组就有序了。
-# """
-
-#     result = code_generator(problem, user_solution, "C++")
-
-#     # print("=== 用户解答理解 ===")
-#     # print(result["solution_understanding"])
-
-#     # print("\n=== 按用户解答生成的核心函数 ===")
-#     # print(result["code"])
-
-#     print("\n=== 按用户解答生成的测试代码（含main） ===")
-#     print(result["test_code"])
-
-#     print("\n=== 优化建议 ===")
-#     print(result["suggestion"])
-
-#     # print("\n=== 最优解核心函数 ===")
-#     # print(result["best_code"])
-
-#     print("\n=== 最优解测试代码（含main） ===")
-#     print(result["best_test_code"])
-
 """
-基于题目+用户解答，生成：
+基于题目+用户解答（伪代码/文字），生成：
 1. 核心函数代码
 2. 内置测试版完整程序（test_code）
 3. 可从 stdin 读取输入的完整程序（stdin_code）
@@ -424,8 +17,23 @@
 
 import re
 import json
+import os
 import requests
+import yaml
 from typing import Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor
+
+
+# =========================
+# Prompt 模板加载
+# =========================
+def _load_prompts():
+    config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config")
+    prompts_path = os.path.join(config_dir, "prompts.yaml")
+    with open(prompts_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)["prompts"]
+
+PROMPTS = _load_prompts()
 
 
 # =========================
@@ -778,26 +386,40 @@ class CodeGenAgent:
     def run(self, problem_description: str, user_solution: str, language: str) -> Dict[str, Any]:
         normalized_language = normalize_language_name(language)
 
-        solution_understanding = self._understand_solution(problem_description, user_solution)
-        thought = self._reason(problem_description, solution_understanding)
+        # Round 1: 3 个并行调用
+        # - _understand_solution: 理解用户解答
+        # - _generate_code: 生成核心代码（直接翻译，不依赖 solution_understanding）
+        # - _generate_best_code: 生成最优解（依赖 solution_understanding）
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            f1 = executor.submit(self._understand_solution, problem_description, user_solution)
+            f2 = executor.submit(self._generate_code, problem_description, user_solution, normalized_language)
+            f8 = executor.submit(self._generate_best_code, problem_description, f1.result(), normalized_language)
 
-        code = self._generate_code(problem_description, solution_understanding, thought, normalized_language)
+            solution_understanding = f1.result()
+            code = f2.result()
+            best_code = f8.result()
 
-        io_format = self._infer_io_format(
-            problem_description=problem_description,
-            solution_understanding=solution_understanding,
-            code=code,
-            language=normalized_language
-        )
+        # Round 2: 2 个并行调用
+        # - _infer_io_format: 推断 IO 格式（依赖 solution_understanding + code）
+        # - _generate_suggestion: 优化建议（依赖 solution_understanding + code）
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            f3 = executor.submit(self._infer_io_format, problem_description, solution_understanding, code, normalized_language)
+            f7 = executor.submit(self._generate_suggestion, problem_description, solution_understanding, code, normalized_language)
 
-        test_cases = self._generate_test_cases(
-            problem_description=problem_description,
-            solution_understanding=solution_understanding,
-            code=code,
-            io_format=io_format,
-            language=normalized_language
-        )
+            io_format = f3.result()
+            suggestion = f7.result()
 
+        # Round 3: 2 个并行调用
+        # - _generate_test_cases: 生成测试用例（依赖 solution_understanding + code + io_format）
+        # - _generate_stdin_code: 生成 stdin 程序（依赖 code + io_format）
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            f4 = executor.submit(self._generate_test_cases, problem_description, solution_understanding, code, io_format, normalized_language)
+            f6 = executor.submit(self._generate_stdin_code, problem_description, solution_understanding, code, io_format, normalized_language)
+
+            test_cases = f4.result()
+            stdin_code = f6.result()
+
+        # Round 4: 顺序执行（_generate_test_code 依赖 _generate_test_cases 的结果）
         test_code = self._generate_test_code(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
@@ -807,40 +429,15 @@ class CodeGenAgent:
             language=normalized_language
         )
 
-        stdin_code = self._generate_stdin_code(
-            problem_description=problem_description,
-            solution_understanding=solution_understanding,
-            code=code,
-            io_format=io_format,
-            language=normalized_language
-        )
+        # Round 5: 2 个并行调用
+        # - _generate_best_test_code: 最优解测试程序（依赖 best_code + io_format）
+        # - _generate_best_stdin_code: 最优解 stdin 程序（依赖 best_code + io_format）
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            f9 = executor.submit(self._generate_best_test_code, problem_description, best_code, io_format, normalized_language)
+            f10 = executor.submit(self._generate_best_stdin_code, problem_description, best_code, io_format, normalized_language)
 
-        suggestion = self._generate_suggestion(
-            problem_description,
-            solution_understanding,
-            code,
-            normalized_language
-        )
-
-        best_code = self._generate_best_code(
-            problem_description,
-            solution_understanding,
-            normalized_language
-        )
-
-        best_test_code = self._generate_best_test_code(
-            problem_description=problem_description,
-            best_code=best_code,
-            io_format=io_format,
-            language=normalized_language
-        )
-
-        best_stdin_code = self._generate_best_stdin_code(
-            problem_description=problem_description,
-            best_code=best_code,
-            io_format=io_format,
-            language=normalized_language
-        )
+            best_test_code = f9.result()
+            best_stdin_code = f10.result()
 
         return {
             "language": language,
@@ -861,36 +458,12 @@ class CodeGenAgent:
     # Step 1: 理解用户解答
     # =========================
     def _understand_solution(self, problem_description: str, user_solution: str) -> str:
-        prompt = f"""
-你是一个算法理解专家。
-
-用户给出的“解答”可能是：
-1. 伪代码
-2. 文字版题解
-3. 伪代码和文字混合
-4. 不太规范但表达了解题步骤
-
-你的任务：
-- 准确理解用户的解题思路
-- 整理成结构化算法说明
-- 不要优化，不要擅自替换成更优解
-- 如果用户表述不够规范，请在不改变核心思路的前提下合理补全
-
-输出格式：
-1. 输入输出
-2. 核心思路
-3. 算法步骤
-4. 边界条件
-5. 实现注意事项
-
-题目：
-{problem_description}
-
-用户解答：
-{user_solution}
-"""
+        prompt = PROMPTS["understand_solution"]["template"].format(
+            problem_description=problem_description,
+            user_solution=user_solution
+        )
         return self.llm.chat([
-            {"role": "system", "content": "严谨的算法理解专家"},
+            {"role": "system", "content": PROMPTS["understand_solution"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -898,66 +471,26 @@ class CodeGenAgent:
     # Step 2: 分析
     # =========================
     def _reason(self, problem_description: str, solution_understanding: str) -> str:
-        prompt = f"""
-你是一个算法分析专家。
-
-任务：
-基于“整理后的用户解答”分析实现逻辑。
-
-要求：
-- 不写代码
-- 不优化逻辑
-- 严格按照用户解答来理解
-
-输出：
-1. 输入输出
-2. 算法流程
-3. 实现细节
-4. 边界情况
-
-题目：
-{problem_description}
-
-整理后的用户解答：
-{solution_understanding}
-"""
+        prompt = PROMPTS["reason"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding
+        )
         return self.llm.chat([
-            {"role": "system", "content": "严谨的算法分析专家"},
+            {"role": "system", "content": PROMPTS["reason"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
     # =========================
-    # Step 3: 核心函数
+    # Step 3: 核心函数（严格按伪代码翻译）
     # =========================
-    def _generate_code(self, problem_description: str, solution_understanding: str, thought: str, language: str) -> str:
-        prompt = f"""
-你是一个受控代码生成器。
-
-强约束：
-- 必须严格按照用户解答实现
-- 禁止擅自优化或替换成更优解
-- 只实现核心函数，不写 main
-- 自动补全必要的类型、导入、函数签名
-- 代码必须可运行
-- 只输出纯代码，不要 markdown 代码块，不要 ``` 标记
-
-语言：{language}
-
-题目：
-{problem_description}
-
-整理后的用户解答：
-{solution_understanding}
-
-分析：
-{thought}
-
-输出要求：
-- 只输出代码
-- 不要解释
-"""
+    def _generate_code(self, problem_description: str, user_solution: str, language: str) -> str:
+        prompt = PROMPTS["generate_code"]["template"].format(
+            problem_description=problem_description,
+            user_solution=user_solution,
+            language=language
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "严格代码生成器"},
+            {"role": "system", "content": PROMPTS["generate_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -966,44 +499,14 @@ class CodeGenAgent:
     # Step 4: 推断统一 IO 格式
     # =========================
     def _infer_io_format(self, problem_description: str, solution_understanding: str, code: str, language: str) -> str:
-        prompt = f"""
-你是一个算法题 I/O 设计专家。
-
-任务：
-根据题目、用户解答和核心代码，推断一份统一且自然的输入输出格式说明。
-后续 test_cases 和 stdin_code 都必须严格遵循这份说明。
-
-要求：
-- 不要返回 JSON
-- 不要返回代码
-- 只返回简洁、明确、可执行的“输入格式 + 输出格式”说明
-- 优先选择最自然、最常见、最适合在线判题的格式
-- 如果存在数组、矩阵等一行多个值的情况，要明确说明“空格分隔”
-- 不要含糊，不要给多个备选格式
-- 格式说明必须足够明确，以便不同语言都能一致实现
-
-语言：{language}
-
-题目：
-{problem_description}
-
-用户解答整理：
-{solution_understanding}
-
-核心代码：
-{code}
-
-输出示例风格（仅示例风格，不要照抄）：
-输入格式：
-第一行输入整数 n，表示数组长度。
-第二行输入 n 个整数，表示数组元素，元素之间用空格分隔。
-第三行输入整数 target。
-
-输出格式：
-输出两个下标组成的数组。
-"""
+        prompt = PROMPTS["infer_io_format"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding,
+            code=code,
+            language=language
+        )
         return self.llm.chat([
-            {"role": "system", "content": "I/O 格式设计专家"},
+            {"role": "system", "content": PROMPTS["infer_io_format"]["system"]},
             {"role": "user", "content": prompt}
         ]).strip()
 
@@ -1018,47 +521,15 @@ class CodeGenAgent:
         io_format: str,
         language: str
     ) -> List[str]:
-        prompt = f"""
-你是一个测试数据设计专家。
-
-任务：
-根据下面给定的输入格式说明，为这道题和代码生成多组“标准输入字符串”测试数据。
-
-要求：
-- 输出必须是 JSON 数组
-- 数组中的每个元素都必须是字符串
-- 每个字符串都代表一次完整 stdin 输入
-- 每个字符串都必须严格符合下面给定的输入格式说明
-- 每个字符串都必须是普通多行文本输入，不是 JSON 对象，不是字典，不是嵌套 JSON
-- 不要返回任何解释、说明、markdown 或代码块
-- 测试数据总数不要超过 6 组，优先控制在 5 组以内
-- 在数量尽量精简的前提下，选择最有代表性的测试数据，尽可能覆盖关键边界情况
-- 尽量覆盖：
-  1. 正常情况
-  2. 边界情况
-  3. 极小规模情况
-  4. 特殊情况
-- 如果输入格式说明中某一行是“多个整数空格分隔”，就必须按该格式生成，不能改成每个整数单独一行
-
-语言：{language}
-
-题目：
-{problem_description}
-
-用户解答整理：
-{solution_understanding}
-
-当前核心代码：
-{code}
-
-输入输出格式说明：
-{io_format}
-
-输出示例（仅示例格式，不要照抄）：
-["5\\n5 3 8 4 2\\n9\\n", "0\\n"]
-"""
+        prompt = PROMPTS["generate_test_cases"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding,
+            code=code,
+            io_format=io_format,
+            language=language
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "测试数据生成专家"},
+            {"role": "system", "content": PROMPTS["generate_test_cases"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -1087,46 +558,17 @@ class CodeGenAgent:
         if language_policy.get("needs_class_name_match") and language_policy.get("public_class_name"):
             extra.append(f"- 如果该语言有公共类名约束，公共类名必须是 {language_policy['public_class_name']}")
 
-        prompt = f"""
-你是一个测试工程师。
-
-任务：
-基于当前核心函数代码，生成一份“内置测试数据”的完整测试程序。
-
-要求：
-- 生成完整可运行程序
-- 必须包含 main 函数（或等价入口）
-- 程序里直接写死测试样例，不要从 stdin 读取
-- 测试多个 case
-- 打印结果
-- 覆盖正常情况与边界情况
-- 打印结果时，必须确保最终答案实际输出到标准输出，不能漏打
-- 只输出纯代码，不要 markdown 代码块，不要 ``` 标记
-{chr(10).join(extra)}
-
-语言：{language}
-
-题目：
-{problem_description}
-
-整理后的用户解答：
-{solution_understanding}
-
-核心代码：
-{code}
-
-输入输出格式说明：
-{io_format}
-
-可参考的测试输入样例（如果适用）：
-{json.dumps(test_cases, ensure_ascii=False, indent=2)}
-
-输出要求：
-- 只输出完整代码（包含 main）
-- 不解释
-"""
+        prompt = PROMPTS["generate_test_code"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding,
+            code=code,
+            io_format=io_format,
+            test_cases=json.dumps(test_cases, ensure_ascii=False, indent=2),
+            language=language,
+            extra="\n".join(extra) if extra else "- （无特殊约束）"
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "测试代码生成专家"},
+            {"role": "system", "content": PROMPTS["generate_test_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -1144,37 +586,15 @@ class CodeGenAgent:
     ) -> str:
         language_constraints = build_stdin_prompt_constraints(language, io_format)
 
-        prompt = f"""
-你是一个在线判题代码包装专家。
-
-任务：
-把下面的核心函数包装成一份“从 stdin 读取输入”的完整可运行程序。
-
-关键要求：
-{language_constraints}
-- 如果输入格式说明中出现“第二行输入 n 个整数，空格分隔”这类描述，必须正确解析这一整行的多个整数
-- 优先使用 token 流式解析，这样可以同时兼容空格和换行
-- 不要写出“把整行数组字符串直接 parse 成单个整数”的代码
-- 最终结果必须实际打印到 stdout
-- 只输出纯代码，不要 markdown 代码块，不要 ``` 标记
-
-语言：{language}
-
-题目：
-{problem_description}
-
-整理后的用户解答：
-{solution_understanding}
-
-核心代码：
-{code}
-
-输出要求：
-- 只输出完整代码（包含 main 或等价入口）
-- 不解释
-"""
+        prompt = PROMPTS["generate_stdin_code"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding,
+            code=code,
+            language=language,
+            language_constraints=language_constraints
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "stdin 包装代码生成专家"},
+            {"role": "system", "content": PROMPTS["generate_stdin_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=True)
@@ -1183,39 +603,14 @@ class CodeGenAgent:
     # Step 8: 优化建议
     # =========================
     def _generate_suggestion(self, problem_description: str, solution_understanding: str, code: str, language: str) -> str:
-        prompt = f"""
-你是一个算法优化顾问。
-
-任务：
-分析当前这份代码是否是最优解，并给出建议。
-
-输出内容必须包含：
-1. 当前解法的时间复杂度
-2. 当前解法的空间复杂度
-3. 是否存在更优解
-4. 如果不是最优，应该从哪里思考修改
-5. 优化方向是什么
-6. 当前解法适合什么场景
-
-要求：
-- 不要直接输出完整优化代码
-- 建议要具体
-- 如果已经接近最优，也请明确说明原因
-
-题目：
-{problem_description}
-
-用户解答整理：
-{solution_understanding}
-
-当前代码：
-{code}
-
-语言：
-{language}
-"""
+        prompt = PROMPTS["generate_suggestion"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding,
+            code=code,
+            language=language
+        )
         return self.llm.chat([
-            {"role": "system", "content": "资深算法优化顾问"},
+            {"role": "system", "content": PROMPTS["generate_suggestion"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -1223,35 +618,13 @@ class CodeGenAgent:
     # Step 9: 最优解核心函数
     # =========================
     def _generate_best_code(self, problem_description: str, solution_understanding: str, language: str) -> str:
-        prompt = f"""
-你是一个算法竞赛专家。
-
-任务：
-针对题目生成最佳解法代码。
-
-要求：
-- 不受用户原始解答限制
-- 直接采用更优的时间复杂度/空间复杂度方案
-- 如果没有更优解，则给出公认最佳实践
-- 只输出核心函数，不写 main
-- 补全必要导入、类型、函数签名
-- 代码必须可运行
-- 只输出纯代码，不要 markdown 代码块，不要 ``` 标记
-
-语言：{language}
-
-题目：
-{problem_description}
-
-用户解答整理（仅用于理解题意）：
-{solution_understanding}
-
-输出要求：
-- 只输出代码
-- 不要解释
-"""
+        prompt = PROMPTS["generate_best_code"]["template"].format(
+            problem_description=problem_description,
+            solution_understanding=solution_understanding,
+            language=language
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "最优算法代码生成专家"},
+            {"role": "system", "content": PROMPTS["generate_best_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -1266,40 +639,15 @@ class CodeGenAgent:
         if language_policy.get("needs_class_name_match") and language_policy.get("public_class_name"):
             extra.append(f"- 如果该语言有公共类名约束，公共类名必须是 {language_policy['public_class_name']}")
 
-        prompt = f"""
-你是一个测试工程师。
-
-任务：
-基于最佳解代码，生成完整测试程序。
-
-要求：
-- 必须生成完整可运行程序
-- 必须包含 main 函数（或等价入口）
-- 使用内置测试数据，不要读取 stdin
-- 测试多个 case
-- 打印结果
-- 覆盖正常情况和边界情况
-- 最终答案必须实际输出到标准输出
-- 只输出纯代码，不要 markdown 代码块，不要 ``` 标记
-{chr(10).join(extra)}
-
-语言：{language}
-
-题目：
-{problem_description}
-
-最佳解代码：
-{best_code}
-
-输入输出格式说明：
-{io_format}
-
-输出要求：
-- 只输出完整代码（包含 main）
-- 不解释
-"""
+        prompt = PROMPTS["generate_best_test_code"]["template"].format(
+            problem_description=problem_description,
+            best_code=best_code,
+            io_format=io_format,
+            language=language,
+            extra="\n".join(extra) if extra else "- （无特殊约束）"
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "最佳解测试代码生成专家"},
+            {"role": "system", "content": PROMPTS["generate_best_test_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -1310,33 +658,14 @@ class CodeGenAgent:
     def _generate_best_stdin_code(self, problem_description: str, best_code: str, io_format: str, language: str) -> str:
         language_constraints = build_stdin_prompt_constraints(language, io_format)
 
-        prompt = f"""
-你是一个在线判题代码包装专家。
-
-任务：
-把最佳解核心函数包装成一份“从 stdin 读取输入”的完整可运行程序。
-
-关键要求：
-{language_constraints}
-- 如果输入格式说明中出现“多个整数空格分隔”的数组行，必须正确 split / token 化解析
-- 优先使用 token 流式解析，这样可以同时兼容空格和换行
-- 最终结果必须实际打印到 stdout
-- 只输出纯代码，不要 markdown 代码块，不要 ``` 标记
-
-语言：{language}
-
-题目：
-{problem_description}
-
-最佳解代码：
-{best_code}
-
-输出要求：
-- 只输出完整代码（包含 main 或等价入口）
-- 不解释
-"""
+        prompt = PROMPTS["generate_best_stdin_code"]["template"].format(
+            problem_description=problem_description,
+            best_code=best_code,
+            language=language,
+            language_constraints=language_constraints
+        )
         result = self.llm.chat([
-            {"role": "system", "content": "最佳解 stdin 包装代码生成专家"},
+            {"role": "system", "content": PROMPTS["generate_best_stdin_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=True)
