@@ -33,6 +33,13 @@ def _load_prompts():
     with open(prompts_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)["prompts"]
 
+
+def _load_base_config():
+    config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config")
+    config_path = os.path.join(config_dir, "base.yaml")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
 PROMPTS = _load_prompts()
 
 
@@ -349,11 +356,13 @@ def post_process_generated_code(code: str, language: str, is_stdin_code: bool = 
 # =========================
 class LLMClient:
     def __init__(self):
-        self.api_key = "sk-zeBMnqw4L58EseM8nxCRvO4Iqz7kO6rmrxU5hQOmktKCBhOJ"
-        self.api_base = "https://www.dmxapi.cn/v1"
-        self.model = "gpt-4o-mini"
-        self.temperature = 0.3
-        self.top_p = 0.9
+        cfg = _load_base_config()
+        llm_cfg = cfg["llm"][cfg["llm"]["use"]]
+        self.api_key = llm_cfg["api_key"]
+        self.api_base = llm_cfg["api_base"]
+        self.model = llm_cfg["model"]
+        self.temperature = llm_cfg.get("temperature", 0.85)
+        self.top_p = llm_cfg.get("top_p", 0.9)
 
     def chat(self, messages):
         url = f"{self.api_base}/chat/completions"

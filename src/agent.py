@@ -94,7 +94,7 @@ def load_config():
 
 # Initialize LLM client
 CONFIG = load_config()
-LLM_PROVIDER = CONFIG["llm"]['siliconflow']
+LLM_PROVIDER = CONFIG["llm"][CONFIG["llm"]["use"]]
 
 def create_llm_client():
     """Create OpenAI-compatible LLM client"""
