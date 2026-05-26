@@ -45,6 +45,9 @@ from src.program.code_generator import code_generator
 # ========== 代码运行 API ==========
 from src.program.code_runner import code_runner as run_code
 
+# ========== 标签分类 API ==========
+from src.tag_classifier import classify_problem_tags
+
 # ========== 数据库 (SQLite) ==========
 from src.database import (
     init_db,
@@ -434,6 +437,40 @@ def api_code_runner(req: CodeRunnerRequest):
             stdin="",
             language=service_language
         )
+
+
+# ========== 标签分类 API ==========
+
+class TagClassifyRequest(BaseModel):
+    title: str
+    description: str = ""
+    input: str = ""
+    output: str = ""
+    hint: str = ""
+    examples: Optional[List[Dict[str, str]]] = None
+    available_tags: List[Dict[str, str]]  # [{"tag_id": "1", "tag_name": "分治"}]
+
+
+@agent_router.post("/classify_tags")
+def api_classify_tags(req: TagClassifyRequest):
+    """
+    根据题目内容，从给定标签列表中推荐合适的算法标签。
+
+    返回已匹配的 tag_id 列表和建议的新标签名列表。
+    """
+    examples = req.examples or []
+    tags = [{"tag_id": int(t["tag_id"]), "tag_name": t["tag_name"]} for t in req.available_tags]
+
+    result = classify_problem_tags(
+        title=req.title,
+        description=req.description,
+        input_fmt=req.input,
+        output_fmt=req.output,
+        hint=req.hint,
+        examples=examples,
+        available_tags=tags,
+    )
+    return {"code": 0, "message": "success", "data": result}
 
 
 # ========== PPT 备课智能体路由 ==========
