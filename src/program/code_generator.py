@@ -385,57 +385,37 @@ class CodeGenAgent:
     def run(self, problem_description: str, user_solution: str, language: str) -> Dict[str, Any]:
         normalized_language = normalize_language_name(language)
 
-        # Round 1: 3 个并行调用
+        # Round 1: 2 个并行调用
         # - _understand_solution: 理解用户解答
-        # - _generate_code: 生成核心代码（直接翻译，不依赖 solution_understanding）
         # - _generate_best_code: 生成最优解（依赖 solution_understanding）
         with ThreadPoolExecutor(max_workers=5) as executor:
             f1 = executor.submit(self._understand_solution, problem_description, user_solution)
-            f2 = executor.submit(self._generate_code, problem_description, user_solution, normalized_language)
             f8 = executor.submit(self._generate_best_code, problem_description, f1.result(), normalized_language)
 
             solution_understanding = f1.result()
-            code = f2.result()
             best_code = f8.result()
 
         # Round 2: 2 个并行调用
-        # - _infer_io_format: 推断 IO 格式（依赖 solution_understanding + code）
-        # - _generate_suggestion: 优化建议（依赖 solution_understanding + code）
+        # - _infer_io_format: 推断 IO 格式
+        # - _generate_suggestion: 优化建议
         with ThreadPoolExecutor(max_workers=5) as executor:
-            f3 = executor.submit(self._infer_io_format, problem_description, solution_understanding, code, normalized_language)
-            f7 = executor.submit(self._generate_suggestion, problem_description, solution_understanding, code, normalized_language)
+            f3 = executor.submit(self._infer_io_format, problem_description, solution_understanding, best_code, normalized_language)
+            f7 = executor.submit(self._generate_suggestion, problem_description, solution_understanding, best_code, normalized_language)
 
             io_format = f3.result()
             suggestion = f7.result()
 
-        # Round 3: 2 个并行调用
-        # - _generate_test_cases: 生成测试用例（依赖 solution_understanding + code + io_format）
-        # - _generate_stdin_code: 生成 stdin 程序（依赖 code + io_format）
+        # Round 3: 3 个并行调用
+        # - _generate_test_cases: 生成测试用例
+        # - _generate_stdin_code: stdin 程序（基于最优解代码）
+        # - _generate_best_stdin_code: stdin 程序（最优解版）
         with ThreadPoolExecutor(max_workers=5) as executor:
-            f4 = executor.submit(self._generate_test_cases, problem_description, solution_understanding, code, io_format, normalized_language)
-            f6 = executor.submit(self._generate_stdin_code, problem_description, solution_understanding, code, io_format, normalized_language)
+            f4 = executor.submit(self._generate_test_cases, problem_description, solution_understanding, best_code, io_format, normalized_language)
+            f6 = executor.submit(self._generate_stdin_code, problem_description, solution_understanding, best_code, io_format, normalized_language)
+            f10 = executor.submit(self._generate_best_stdin_code, problem_description, best_code, io_format, normalized_language)
 
             test_cases = f4.result()
             stdin_code = f6.result()
-
-        # Round 4: 顺序执行（_generate_test_code 依赖 _generate_test_cases 的结果）
-        test_code = self._generate_test_code(
-            problem_description=problem_description,
-            solution_understanding=solution_understanding,
-            code=code,
-            io_format=io_format,
-            test_cases=test_cases,
-            language=normalized_language
-        )
-
-        # Round 5: 2 个并行调用
-        # - _generate_best_test_code: 最优解测试程序（依赖 best_code + io_format）
-        # - _generate_best_stdin_code: 最优解 stdin 程序（依赖 best_code + io_format）
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            f9 = executor.submit(self._generate_best_test_code, problem_description, best_code, io_format, normalized_language)
-            f10 = executor.submit(self._generate_best_stdin_code, problem_description, best_code, io_format, normalized_language)
-
-            best_test_code = f9.result()
             best_stdin_code = f10.result()
 
         return {
@@ -443,13 +423,10 @@ class CodeGenAgent:
             "normalized_language": normalized_language,
             "solution_understanding": solution_understanding,
             "io_format": io_format,
-            "code": code,
             "test_cases": test_cases,
-            "test_code": test_code,
             "stdin_code": stdin_code,
             "suggestion": suggestion,
             "best_code": best_code,
-            "best_test_code": best_test_code,
             "best_stdin_code": best_stdin_code,
         }
 
@@ -465,34 +442,6 @@ class CodeGenAgent:
             {"role": "system", "content": _PROMPTS["understand_solution"]["system"]},
             {"role": "user", "content": prompt}
         ])
-
-    # =========================
-    # Step 2: 分析
-    # =========================
-    def _reason(self, problem_description: str, solution_understanding: str) -> str:
-        prompt = _PROMPTS["reason"]["template"].format(
-            problem_description=problem_description,
-            solution_understanding=solution_understanding
-        )
-        return self.llm.chat([
-            {"role": "system", "content": _PROMPTS["reason"]["system"]},
-            {"role": "user", "content": prompt}
-        ])
-
-    # =========================
-    # Step 3: 核心函数（严格按伪代码翻译）
-    # =========================
-    def _generate_code(self, problem_description: str, user_solution: str, language: str) -> str:
-        prompt = _PROMPTS["generate_code"]["template"].format(
-            problem_description=problem_description,
-            user_solution=user_solution,
-            language=language
-        )
-        result = self.llm.chat([
-            {"role": "system", "content": _PROMPTS["generate_code"]["system"]},
-            {"role": "user", "content": prompt}
-        ])
-        return post_process_generated_code(result, language, is_stdin_code=False)
 
     # =========================
     # Step 4: 推断统一 IO 格式
@@ -538,39 +487,6 @@ class CodeGenAgent:
             return [str(x) for x in parsed]
 
         return []
-
-    # =========================
-    # Step 6: 内置测试程序
-    # =========================
-    def _generate_test_code(
-        self,
-        problem_description: str,
-        solution_understanding: str,
-        code: str,
-        io_format: str,
-        test_cases: List[str],
-        language: str
-    ) -> str:
-        language_policy = get_language_policy(language)
-        extra = []
-
-        if language_policy.get("needs_class_name_match") and language_policy.get("public_class_name"):
-            extra.append(f"- 如果该语言有公共类名约束，公共类名必须是 {language_policy['public_class_name']}")
-
-        prompt = _PROMPTS["generate_test_code"]["template"].format(
-            problem_description=problem_description,
-            solution_understanding=solution_understanding,
-            code=code,
-            io_format=io_format,
-            test_cases=json.dumps(test_cases, ensure_ascii=False, indent=2),
-            language=language,
-            extra="\n".join(extra) if extra else "- （无特殊约束）"
-        )
-        result = self.llm.chat([
-            {"role": "system", "content": _PROMPTS["generate_test_code"]["system"]},
-            {"role": "user", "content": prompt}
-        ])
-        return post_process_generated_code(result, language, is_stdin_code=False)
 
     # =========================
     # Step 7: stdin 程序
@@ -624,29 +540,6 @@ class CodeGenAgent:
         )
         result = self.llm.chat([
             {"role": "system", "content": _PROMPTS["generate_best_code"]["system"]},
-            {"role": "user", "content": prompt}
-        ])
-        return post_process_generated_code(result, language, is_stdin_code=False)
-
-    # =========================
-    # Step 10: 最优解内置测试程序
-    # =========================
-    def _generate_best_test_code(self, problem_description: str, best_code: str, io_format: str, language: str) -> str:
-        language_policy = get_language_policy(language)
-        extra = []
-
-        if language_policy.get("needs_class_name_match") and language_policy.get("public_class_name"):
-            extra.append(f"- 如果该语言有公共类名约束，公共类名必须是 {language_policy['public_class_name']}")
-
-        prompt = _PROMPTS["generate_best_test_code"]["template"].format(
-            problem_description=problem_description,
-            best_code=best_code,
-            io_format=io_format,
-            language=language,
-            extra="\n".join(extra) if extra else "- （无特殊约束）"
-        )
-        result = self.llm.chat([
-            {"role": "system", "content": _PROMPTS["generate_best_test_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
