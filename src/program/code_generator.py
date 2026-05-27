@@ -18,29 +18,35 @@
 import re
 import json
 import os
-import requests
+from pathlib import Path
 import yaml
 from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor
+
+from openai import OpenAI
 
 
 # =========================
 # Prompt 模板加载
 # =========================
-def _load_prompts():
-    config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config")
-    prompts_path = os.path.join(config_dir, "prompts.yaml")
-    with open(prompts_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)["prompts"]
+_CONFIG_DIR = os.path.join(Path(__file__).parent.parent, "config")
+_PROMPTS_PATH = os.path.join(_CONFIG_DIR, "prompts.yaml")
+
+with open(_PROMPTS_PATH, "r", encoding="utf-8") as f:
+    _PROMPTS = yaml.safe_load(f)["prompts"]
+
+_LLM_CONFIG_PATH = os.path.join(_CONFIG_DIR, "base.yaml")
+with open(_LLM_CONFIG_PATH, "r", encoding="utf-8") as f:
+    _LLM_CONFIG = yaml.safe_load(f)["llm"][yaml.safe_load(f)["llm"]["use"]]
 
 
-def _load_base_config():
-    config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config")
-    config_path = os.path.join(config_dir, "base.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def _create_llm_client():
+    return OpenAI(
+        api_key=_LLM_CONFIG["api_key"],
+        base_url=_LLM_CONFIG["api_base"].rstrip("/")
+    )
 
-PROMPTS = _load_prompts()
+_LLM_CLIENT = _create_llm_client()
 
 
 # =========================
@@ -356,33 +362,16 @@ def post_process_generated_code(code: str, language: str, is_stdin_code: bool = 
 # =========================
 class LLMClient:
     def __init__(self):
-        cfg = _load_base_config()
-        llm_cfg = cfg["llm"][cfg["llm"]["use"]]
-        self.api_key = llm_cfg["api_key"]
-        self.api_base = llm_cfg["api_base"]
-        self.model = llm_cfg["model"]
-        self.temperature = llm_cfg.get("temperature", 0.85)
-        self.top_p = llm_cfg.get("top_p", 0.9)
+        pass
 
     def chat(self, messages):
-        url = f"{self.api_base}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-        }
-
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
-
-        return response.json()["choices"][0]["message"]["content"]
+        resp = _LLM_CLIENT.chat.completions.create(
+            model=_LLM_CONFIG["model"],
+            messages=messages,
+            temperature=_LLM_CONFIG.get("temperature", 0.85),
+            max_tokens=_LLM_CONFIG.get("max_tokens", 4000),
+        )
+        return resp.choices[0].message.content
 
 
 # =========================
@@ -467,12 +456,12 @@ class CodeGenAgent:
     # Step 1: 理解用户解答
     # =========================
     def _understand_solution(self, problem_description: str, user_solution: str) -> str:
-        prompt = PROMPTS["understand_solution"]["template"].format(
+        prompt = _PROMPTS["understand_solution"]["template"].format(
             problem_description=problem_description,
             user_solution=user_solution
         )
         return self.llm.chat([
-            {"role": "system", "content": PROMPTS["understand_solution"]["system"]},
+            {"role": "system", "content": _PROMPTS["understand_solution"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -480,12 +469,12 @@ class CodeGenAgent:
     # Step 2: 分析
     # =========================
     def _reason(self, problem_description: str, solution_understanding: str) -> str:
-        prompt = PROMPTS["reason"]["template"].format(
+        prompt = _PROMPTS["reason"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding
         )
         return self.llm.chat([
-            {"role": "system", "content": PROMPTS["reason"]["system"]},
+            {"role": "system", "content": _PROMPTS["reason"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -493,13 +482,13 @@ class CodeGenAgent:
     # Step 3: 核心函数（严格按伪代码翻译）
     # =========================
     def _generate_code(self, problem_description: str, user_solution: str, language: str) -> str:
-        prompt = PROMPTS["generate_code"]["template"].format(
+        prompt = _PROMPTS["generate_code"]["template"].format(
             problem_description=problem_description,
             user_solution=user_solution,
             language=language
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_code"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -508,14 +497,14 @@ class CodeGenAgent:
     # Step 4: 推断统一 IO 格式
     # =========================
     def _infer_io_format(self, problem_description: str, solution_understanding: str, code: str, language: str) -> str:
-        prompt = PROMPTS["infer_io_format"]["template"].format(
+        prompt = _PROMPTS["infer_io_format"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
             code=code,
             language=language
         )
         return self.llm.chat([
-            {"role": "system", "content": PROMPTS["infer_io_format"]["system"]},
+            {"role": "system", "content": _PROMPTS["infer_io_format"]["system"]},
             {"role": "user", "content": prompt}
         ]).strip()
 
@@ -530,7 +519,7 @@ class CodeGenAgent:
         io_format: str,
         language: str
     ) -> List[str]:
-        prompt = PROMPTS["generate_test_cases"]["template"].format(
+        prompt = _PROMPTS["generate_test_cases"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
             code=code,
@@ -538,7 +527,7 @@ class CodeGenAgent:
             language=language
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_test_cases"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_test_cases"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -567,7 +556,7 @@ class CodeGenAgent:
         if language_policy.get("needs_class_name_match") and language_policy.get("public_class_name"):
             extra.append(f"- 如果该语言有公共类名约束，公共类名必须是 {language_policy['public_class_name']}")
 
-        prompt = PROMPTS["generate_test_code"]["template"].format(
+        prompt = _PROMPTS["generate_test_code"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
             code=code,
@@ -577,7 +566,7 @@ class CodeGenAgent:
             extra="\n".join(extra) if extra else "- （无特殊约束）"
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_test_code"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_test_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -595,7 +584,7 @@ class CodeGenAgent:
     ) -> str:
         language_constraints = build_stdin_prompt_constraints(language, io_format)
 
-        prompt = PROMPTS["generate_stdin_code"]["template"].format(
+        prompt = _PROMPTS["generate_stdin_code"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
             code=code,
@@ -603,7 +592,7 @@ class CodeGenAgent:
             language_constraints=language_constraints
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_stdin_code"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_stdin_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=True)
@@ -612,14 +601,14 @@ class CodeGenAgent:
     # Step 8: 优化建议
     # =========================
     def _generate_suggestion(self, problem_description: str, solution_understanding: str, code: str, language: str) -> str:
-        prompt = PROMPTS["generate_suggestion"]["template"].format(
+        prompt = _PROMPTS["generate_suggestion"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
             code=code,
             language=language
         )
         return self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_suggestion"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_suggestion"]["system"]},
             {"role": "user", "content": prompt}
         ])
 
@@ -627,13 +616,13 @@ class CodeGenAgent:
     # Step 9: 最优解核心函数
     # =========================
     def _generate_best_code(self, problem_description: str, solution_understanding: str, language: str) -> str:
-        prompt = PROMPTS["generate_best_code"]["template"].format(
+        prompt = _PROMPTS["generate_best_code"]["template"].format(
             problem_description=problem_description,
             solution_understanding=solution_understanding,
             language=language
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_best_code"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_best_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -648,7 +637,7 @@ class CodeGenAgent:
         if language_policy.get("needs_class_name_match") and language_policy.get("public_class_name"):
             extra.append(f"- 如果该语言有公共类名约束，公共类名必须是 {language_policy['public_class_name']}")
 
-        prompt = PROMPTS["generate_best_test_code"]["template"].format(
+        prompt = _PROMPTS["generate_best_test_code"]["template"].format(
             problem_description=problem_description,
             best_code=best_code,
             io_format=io_format,
@@ -656,7 +645,7 @@ class CodeGenAgent:
             extra="\n".join(extra) if extra else "- （无特殊约束）"
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_best_test_code"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_best_test_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=False)
@@ -667,14 +656,14 @@ class CodeGenAgent:
     def _generate_best_stdin_code(self, problem_description: str, best_code: str, io_format: str, language: str) -> str:
         language_constraints = build_stdin_prompt_constraints(language, io_format)
 
-        prompt = PROMPTS["generate_best_stdin_code"]["template"].format(
+        prompt = _PROMPTS["generate_best_stdin_code"]["template"].format(
             problem_description=problem_description,
             best_code=best_code,
             language=language,
             language_constraints=language_constraints
         )
         result = self.llm.chat([
-            {"role": "system", "content": PROMPTS["generate_best_stdin_code"]["system"]},
+            {"role": "system", "content": _PROMPTS["generate_best_stdin_code"]["system"]},
             {"role": "user", "content": prompt}
         ])
         return post_process_generated_code(result, language, is_stdin_code=True)
