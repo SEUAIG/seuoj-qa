@@ -29,7 +29,7 @@ from openai import OpenAI
 # =========================
 # Prompt 模板加载
 # =========================
-_CONFIG_DIR = os.path.join(Path(__file__).parent.parent, "config")
+_CONFIG_DIR = os.path.join(Path(__file__).parent.parent.parent, "config")
 _PROMPTS_PATH = os.path.join(_CONFIG_DIR, "prompts.yaml")
 
 with open(_PROMPTS_PATH, "r", encoding="utf-8") as f:
@@ -37,7 +37,8 @@ with open(_PROMPTS_PATH, "r", encoding="utf-8") as f:
 
 _LLM_CONFIG_PATH = os.path.join(_CONFIG_DIR, "base.yaml")
 with open(_LLM_CONFIG_PATH, "r", encoding="utf-8") as f:
-    _LLM_CONFIG = yaml.safe_load(f)["llm"][yaml.safe_load(f)["llm"]["use"]]
+    _base = yaml.safe_load(f)
+    _LLM_CONFIG = _base["llm"][_base["llm"]["use"]]
 
 
 def _create_llm_client():
